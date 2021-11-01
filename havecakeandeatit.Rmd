@@ -113,6 +113,10 @@ dfx1 <- df %>%
 dfx0 <- df %>%
   mutate(X=0)
 
+
+
+
+
 poX1 <- predictnl(logit,
           function(obj,newdata)
           mean(predict(obj,newdata=dfx1,type="response")))
@@ -128,8 +132,8 @@ mrd <- predictnl(logit,
 
 mrr <- predictnl(logit,
           function(obj,newdata)
-            mean(predict(obj,newdata=dfx1,type="response")) /
-            mean(predict(obj,newdata=dfx0,type="response")))
+            log(mean(predict(obj,newdata=dfx1,type="response"))) -
+            log(mean(predict(obj,newdata=dfx0,type="response"))))
 
 mor <- predictnl(logit,
                  function(obj,newdata)
@@ -162,10 +166,10 @@ crd <- predictnl(logit,
 
 crr <- predictnl(logit,
                  function(obj,newdata)
-                   (exp(mean(predict(obj,newdata=dfx1,type="link"))) /
-                   (1+exp(mean(predict(obj,newdata=dfx1,type="link"))))) /
-                   (exp(mean(predict(obj,newdata=dfx0,type="link"))) /
-                   (1+exp(mean(predict(obj,newdata=dfx0,type="link"))))))
+                   log((exp(mean(predict(obj,newdata=dfx1,type="link"))) /
+                   (1+exp(mean(predict(obj,newdata=dfx1,type="link")))))) -
+                   log((exp(mean(predict(obj,newdata=dfx0,type="link"))) /
+                   (1+exp(mean(predict(obj,newdata=dfx0,type="link")))))))
 
 
 
@@ -184,7 +188,7 @@ t3marg <- bind_cols(tmarg, t2marg) %>%
   rename("95% CI - Low"="2.5 %",
          "95% CI - High"="97.5 %") %>%
   select(X, everything()) %>%
-  mutate(across(-c(X, Effect), ~if_else(Effect=="OR", exp(.x), .x)))
+  mutate(across(-c(X, Effect), ~if_else(Effect=="OR" | Effect=="RR", exp(.x), .x)))
 
 tcon <- bind_rows(conone, .id="Effect")
 t2con <- map(conone, confint) %>%
@@ -195,7 +199,7 @@ t3con <- bind_cols(tcon, t2con) %>%
   rename("95% CI - Low"="2.5 %",
          "95% CI - High"="97.5 %") %>%
   select(X, everything()) %>%
-  mutate(across(3:5, ~if_else(Effect=="OR", exp(.x), .x)))
+  mutate(across(3:5, ~if_else(Effect=="OR" | Effect=="RR", exp(.x), .x)))
 
 fsm <- glm(X~C, data=df, family = binomial())
 
@@ -212,7 +216,7 @@ coss <- svycontrast(ssmOR2, list(co0=c("interaction(C, X)0.0"=1-mean(df$C),
 
 fscoX0 <- svycontrast(coss, quote(exp(co0)/(1+exp(co0))))
 fscoX1 <- svycontrast(coss, quote(exp(co1)/(1+exp(co1))))
-fscrr <- svycontrast(coss, quote((exp(co1)/(1+exp(co1)))/(exp(co0)/(1+exp(co0)))))
+fscrr <- svycontrast(coss, quote((log(exp(co1)/(1+exp(co1))))-log((exp(co0)/(1+exp(co0))))))
 fscor <- svycontrast(coss, c(-1 ,1))
 fscrd <- svycontrast(coss, quote((exp(co1)/(1+exp(co1)))-(exp(co0)/(1+exp(co0)))))
 
@@ -230,7 +234,7 @@ fst3con <- bind_cols(fstcon, fst2con) %>%
          "95% CI - Low"="2.5 %",
          "95% CI - High"="97.5 %") %>%
   select(Effect, X, everything()) %>%
-  mutate(across(3:5, ~if_else(Effect=="OR", exp(.x), .x)))
+  mutate(across(3:5, ~if_else(Effect=="OR" | Effect=="RR", exp(.x), .x)))
 
 
 fsmor <- svyglm(Y~factor(X), design=svydf, family = binomial())
@@ -238,9 +242,9 @@ fsmX0 <- svycontrast(fsmor, quote(exp(`(Intercept)`) / (1+exp(`(Intercept)`))))
 fsmX1 <- svycontrast(fsmor, quote((exp(`(Intercept)`+`factor(X)1`))
                                   / (1+(exp(`(Intercept)`+`factor(X)1`)))))
 
-fsmrr <- svycontrast(fsmor, quote(((exp(`(Intercept)`+`factor(X)1`))
-                                  / (1+(exp(`(Intercept)`+`factor(X)1`)))) / 
-                             (exp(`(Intercept)`) / (1+exp(`(Intercept)`)))))
+fsmrr <- svycontrast(fsmor, quote(log((exp(`(Intercept)`+`factor(X)1`))
+                                  / (1+(exp(`(Intercept)`+`factor(X)1`)))) - 
+                            log((exp(`(Intercept)`) / (1+exp(`(Intercept)`))))))
 fsmrd <- svycontrast(fsmor, quote(((exp(`(Intercept)`+`factor(X)1`))
                                    / (1+(exp(`(Intercept)`+`factor(X)1`)))) - 
                                     (exp(`(Intercept)`) / (1+exp(`(Intercept)`)))))
@@ -260,8 +264,8 @@ fst3marg <- bind_cols(fstmarg, fst2marg) %>%
          "95% CI - High"="97.5 %") %>%
    bind_rows(fsmortidy) %>%
    mutate(Effect=if_else(is.na(Effect), "OR", Effect)) %>%
-   mutate(X=c(0,1,1,1,1)) %>%
-   select(Effect, X, everything())
+   mutate(X=c(0,1,1,1,1)) %>%   select(Effect, X, everything()) %>%
+   mutate(across(3:5, ~if_else(Effect=="RR", exp(.x), .x)))
 
 t3con <- as_tibble(t3con)
 t3marg <- as_tibble(t3marg)
@@ -290,7 +294,7 @@ table3 <- yummy(df, X, C)
 
 ### Model time
 
-Now let's use a logistic regression with an interaction to model the effect of X on Y given C. To read the average effect directly from the model you can centre C to obtain the conditional odds ratio `r round(centre_c$estimate[[2]], 2)` (95% CI `r round(centre_c$conf.low[[2]], 2)` - `r round(centre_c$conf.high[[2]], 2)`). Which is the same as in Table 2. One way to easily obtain all effect measures with confidence intervals is to make predictions (on the probability scale for marginal effects and odds scale for conditional scale) from this outcome model (centring not needed). If you are a Stata user you can, I think, do this relatively easily using the [margins](https://www.stata.com/features/overview/marginal-analysis/) command. In R although there is a good range of [equivalent commands](https://vincentarelbundock.github.io/marginaleffects/), none has the same capability. However, the excellent [predictnl](https://mran.microsoft.com/snapshot/2021-03-02/web/packages/rstpm2/vignettes/predictnl.pdf) command can be used with two copies of the data, one where everyone is X equals 1 and the other where everyone is X equals 0. The first two sections (labelled "Outcome Model") of Table 3 contain the results. An alternative method is to model the exposure as a function of the confounder and then derive inverse probability weights (ipw) to be used in a logistic model of the exposure on the outcome weighted by the IPW . I prefer this way and I use [survey contrast](https://www.rdocumentation.org/packages/survey/versions/4.1-1/topics/svycontrast) function in R to do the predictions. Results are shown in the last 2 sections of Table 3. While the CIs are similar across the IPW and outcome model, they are not the same (both methods use the delta method I think), so might be an error for someone to spot in the code?
+Now let's use a logistic regression with an interaction to model the effect of X on Y given C. To read the average effect directly from the model you can centre C to obtain the conditional odds ratio `r round(centre_c$estimate[[2]], 2)` (95% CI `r round(centre_c$conf.low[[2]], 2)` - `r round(centre_c$conf.high[[2]], 2)`). Which is the same as in Table 2. One way to easily obtain all effect measures with confidence intervals is to make predictions (on the probability scale for marginal effects and odds scale for conditional scale) from this outcome model (centring not needed). If you are a Stata user you can, I think, do this relatively easily using the [margins](https://www.stata.com/features/overview/marginal-analysis/) command. In R there is a good range of [equivalent commands](https://vincentarelbundock.github.io/marginaleffects/). However, I use the excellent [predictnl](https://mran.microsoft.com/snapshot/2021-03-02/web/packages/rstpm2/vignettes/predictnl.pdf) command with two copies of the data, one where everyone is X equals 1 and the other where everyone is X equals 0. The first two sections (labelled "Outcome Model") of Table 3 contain the results. An alternative method is to model the exposure as a function of the confounder and then derive inverse probability weights (ipw) to be used in a logistic model of the exposure on the outcome weighted by the IPW . I prefer this way and I use [survey contrast](https://www.rdocumentation.org/packages/survey/versions/4.1-1/topics/svycontrast) function in R to do the predictions. Results are shown in the last 2 sections of Table 3. While the CIs are similar across the IPW and outcome model, they are not the same (both methods use the delta method I think), so might be an error for someone to spot in the code?
 
 Another potential route (at least for marginal effects) would be use teffect in [R](https://github.com/ohines/teffectsR) or [Stata](https://www.stata.com/features/overview/treatment-effects/).
 
